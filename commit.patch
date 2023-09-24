@@ -1,0 +1,253 @@
+diff --git a/.gdbinit.tmpl-riscv b/.gdbinit.tmpl-riscv
+index 6a38a95..cfa9e9b 100644
+--- a/.gdbinit.tmpl-riscv
++++ b/.gdbinit.tmpl-riscv
+@@ -1,5 +1,5 @@
+ set confirm off
+ set architecture riscv:rv64
+-target remote 127.0.0.1:1234
++# target remote 127.0.0.1:1234
+ symbol-file kernel/kernel
+ set disassemble-next-line auto
+diff --git a/.vscode/launch.json b/.vscode/launch.json
+new file mode 100644
+index 0000000..fc3e231
+--- /dev/null
++++ b/.vscode/launch.json
+@@ -0,0 +1,18 @@
++{
++    "version": "0.2.0",
++    "configurations": [
++        {
++            "type": "gdb",
++            "request": "attach",
++            "name": "Attach to gdbserver",
++            "executable": "${workspaceRoot}/kernel/kernel",
++            "gdbpath": "gdb-multiarch",
++            "remote": true,            
++            "target": "127.0.0.1:26201",
++            "cwd": "${workspaceRoot}",
++            "setupCommands": {
++                "text": "source ${workspaceFolder}/.gdbinit"
++            }
++        }
++    ]
++}
+diff --git a/Makefile b/Makefile
+index cac799d..94e7f9f 100644
+--- a/Makefile
++++ b/Makefile
+@@ -154,6 +154,9 @@ UPROGS=\
+ 	$U/_grind\
+ 	$U/_wc\
+ 	$U/_zombie\
++	$U/_sleep\
++	$U/_pingpong\
++	$U/_find\
+ 
+ 
+ ifeq ($(LAB),syscall)
+diff --git a/kernel/main.c b/kernel/main.c
+index 8a3dc2e..347ddda 100644
+--- a/kernel/main.c
++++ b/kernel/main.c
+@@ -9,8 +9,7 @@ volatile static int started = 0;
+ // start() jumps here in supervisor mode on all CPUs.
+ void main() {
+   if (cpuid() == 0) {
+-    // consoleinit();
+-    // printfinit();
++    printf("[210110620] enter main, init kernel\n");
+     printf("\n");
+     printf("xv6 kernel is booting\n");
+     printf("\n");
+@@ -37,6 +36,8 @@ void main() {
+     kvminithart();   // turn on paging
+     trapinithart();  // install kernel trap vector
+     plicinithart();  // ask PLIC for device interrupts
++                     // consoleinit();
++    // printfinit();
+   }
+ 
+   scheduler();
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 1607145..95da31e 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -183,6 +183,7 @@ uchar initcode[] = {0x17, 0x05, 0x00, 0x00, 0x13, 0x05, 0x45, 0x02, 0x97, 0x05,
+ 
+ // Set up first user process.
+ void userinit(void) {
++  printf("[210110620] enter userinit\n");
+   struct proc *p;
+ 
+   p = allocproc();
+@@ -197,6 +198,7 @@ void userinit(void) {
+   p->trapframe->epc = 0;      // user program counter
+   p->trapframe->sp = PGSIZE;  // user stack pointer
+ 
++  printf("[210110620] copy initcode to first user process\n");
+   safestrcpy(p->name, "initcode", sizeof(p->name));
+   p->cwd = namei("/");
+ 
+diff --git a/kernel/start.c b/kernel/start.c
+index f704fee..752c05d 100644
+--- a/kernel/start.c
++++ b/kernel/start.c
+@@ -52,6 +52,7 @@ void start() {
+     // init uart and printf
+     consoleinit();
+     printfinit();
++    printf("[210110620] in start, init driver, interrupts and change mode\n");
+   }
+ 
+   // switch to supervisor mode and jump to main().
+diff --git a/user/find.c b/user/find.c
+new file mode 100644
+index 0000000..8eb16b8
+--- /dev/null
++++ b/user/find.c
+@@ -0,0 +1,69 @@
++#include "kernel/types.h"
++#include "kernel/stat.h"
++#include "user/user.h"
++#include "kernel/fs.h"
++
++char *fmtname(char *path) {
++  static char buf[DIRSIZ + 1];  // dirsiz 是fs.h中定义的常量 14，表示文件名的最大字符
++  char *p;
++
++  // Find first character after last slash.
++  for (p = path + strlen(path); p >= path && *p != '/'; p--)
++    ;
++  p++;  // p指针落在最后一个/后第一个字母
++
++  // Return blank-padded name.
++  if (strlen(p) >= DIRSIZ) return p;
++  memmove(buf, p, strlen(p));                         // 文件名赋值给buf
++  memset(buf + strlen(p), '\0', DIRSIZ - strlen(p));  // 清空后面的值，将空改成\0以结束字符串
++  return buf;                                         // 文件名指针
++}
++
++void find(char *path, char *aim) {
++  char buf[512], *p;
++  int fd;
++  struct dirent de;
++  struct stat st;
++
++  if ((fd = open(path, 0)) < 0) {
++    fprintf(2, "find: cannot open %s\n", path);
++    return;
++  }
++
++  if (fstat(fd, &st) < 0) {
++    fprintf(2, "find: cannot stat %s\n", path);
++    close(fd);
++    return;
++  }
++
++  switch (st.type) {
++    case T_FILE:
++      if (!strcmp(fmtname(path), aim)) printf("%s\n", path);  // 相等
++      break;
++
++    case T_DIR:
++      if (strlen(path) + 1 + DIRSIZ + 1 > sizeof buf) {  // 啥东西没看懂
++        printf("find: path too long\n");
++        break;
++      }
++      strcpy(buf, path);
++      p = buf + strlen(buf);
++      *p++ = '/';
++      while (read(fd, &de, sizeof(de)) == sizeof(de)) {
++        if (de.inum == 0 || !strcmp(de.name, ".") || !strcmp(de.name, "..")) continue;  // 防循环
++        memmove(p, de.name, DIRSIZ);
++        p[DIRSIZ] = '\0';
++        find(buf, aim);
++      }
++      break;
++  }
++  close(fd);
++}
++
++int main(int argc, char *argv[]) {
++  if (argc < 3) {  // 不符合find path name的格式
++    exit(0);
++  }
++  find(argv[1], argv[2]);
++  exit(0);
++}
+diff --git a/user/init.c b/user/init.c
+index 9ca8790..efa4a09 100644
+--- a/user/init.c
++++ b/user/init.c
+@@ -33,7 +33,7 @@ int main(void) {
+       printf("init: exec sh failed\n");
+       exit(1);
+     }
+-
++    printf("[210110620] start sh through execve\n");
+     for (;;) {
+       // this call to wait() returns if the shell exits,
+       // or if a parentless process exits.
+diff --git a/user/pingpong.c b/user/pingpong.c
+new file mode 100644
+index 0000000..6014e5d
+--- /dev/null
++++ b/user/pingpong.c
+@@ -0,0 +1,35 @@
++#include "kernel/types.h"
++#include "user.h"
++
++int main(int argc, char *argv[]) {
++  // p1写，p0读
++  int p1[2];  // ping管
++  int p2[2];  // pong管
++  pipe(p1);
++  pipe(p2);
++  char buffer[4];  // 字符栈，用于承载管道中读取的字符串
++  // 子程序
++  int pid = fork();  // 父子进程
++  if (pid == 0) {
++    close(p1[1]);            // 关闭ping管写口
++    read(p1[0], buffer, 4);  // 读出字符
++    close(p1[0]);
++    printf("%d: received %s\n", getpid(), buffer);  // 按格式打印
++    close(p2[0]);
++    write(p2[1], "pong", 4);  // 写入pong
++    close(p2[1]);
++    exit(0);  // 退出
++  }
++  // 父程序
++  else {
++    close(p1[0]);
++    write(p1[1], "ping", 10);  // 写入ping
++    close(p1[1]);
++    wait(0);  // 等待子进程
++    close(p2[1]);
++    read(p2[0], buffer, 10);
++    close(p2[0]);
++    printf("%d: received %s\n", getpid(), buffer);  // 按格式打印
++    exit(0);                                        // 退出
++  }
++}
+\ No newline at end of file
+diff --git a/user/sleep.c b/user/sleep.c
+new file mode 100644
+index 0000000..5c26605
+--- /dev/null
++++ b/user/sleep.c
+@@ -0,0 +1,13 @@
++#include "kernel/types.h"
++#include "user.h"
++
++int main(int argc, char *argv[]) {
++  if (argc != 2) {
++    printf("sleep needs one argument!\n");
++    exit(-1);
++  }
++  int ticks = atoi(argv[1]);
++  sleep(ticks);
++  printf("(nothing happens for a little while)\n");
++  exit(0);
++}
