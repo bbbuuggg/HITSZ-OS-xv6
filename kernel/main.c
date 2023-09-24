@@ -9,8 +9,7 @@ volatile static int started = 0;
 // start() jumps here in supervisor mode on all CPUs.
 void main() {
   if (cpuid() == 0) {
-    // consoleinit();
-    // printfinit();
+    printf("[210110620] enter main, init kernel\n");
     printf("\n");
     printf("xv6 kernel is booting\n");
     printf("\n");
@@ -37,6 +36,8 @@ void main() {
     kvminithart();   // turn on paging
     trapinithart();  // install kernel trap vector
     plicinithart();  // ask PLIC for device interrupts
+                     // consoleinit();
+    // printfinit();
   }
 
   scheduler();

@@ -33,7 +33,7 @@ int main(void) {
       printf("init: exec sh failed\n");
       exit(1);
     }
-
+    printf("[210110620] start sh through execve\n");
     for (;;) {
       // this call to wait() returns if the shell exits,
       // or if a parentless process exits.
