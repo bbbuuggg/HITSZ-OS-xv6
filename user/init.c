@@ -47,6 +47,6 @@ int main(void) {
       } else {
         // it was a parentless process; do nothing.
       }
-    }
+    }  //
   }
 }
