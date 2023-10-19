@@ -1,0 +1,607 @@
+diff --git a/Makefile b/Makefile
+index bf95a78..5e4c5ea 100644
+--- a/Makefile
++++ b/Makefile
+@@ -161,6 +161,7 @@ UPROGS=\
+ 	$U/_zombie\
+ 	$U/_waittest\
+ 	$U/_exittest\
++	$U/_yieldtest\
+ 
+ 
+ ifeq ($(LAB),trap)
+diff --git a/kernel/defs.h b/kernel/defs.h
+index ecea5e6..5361570 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -10,188 +10,188 @@ struct stat;
+ struct superblock;
+ 
+ // bio.c
+-void            binit(void);
+-struct buf*     bread(uint, uint);
+-void            brelse(struct buf*);
+-void            bwrite(struct buf*);
+-void            bpin(struct buf*);
+-void            bunpin(struct buf*);
++void binit(void);
++struct buf *bread(uint, uint);
++void brelse(struct buf *);
++void bwrite(struct buf *);
++void bpin(struct buf *);
++void bunpin(struct buf *);
+ 
+ // console.c
+-void            consoleinit(void);
+-void            consoleintr(int);
+-void            consputc(int);
++void consoleinit(void);
++void consoleintr(int);
++void consputc(int);
+ 
+ // exec.c
+-int             exec(char*, char**);
++int exec(char *, char **);
+ 
+ // file.c
+-struct file*    filealloc(void);
+-void            fileclose(struct file*);
+-struct file*    filedup(struct file*);
+-void            fileinit(void);
+-int             fileread(struct file*, uint64, int n);
+-int             filestat(struct file*, uint64 addr);
+-int             filewrite(struct file*, uint64, int n);
++struct file *filealloc(void);
++void fileclose(struct file *);
++struct file *filedup(struct file *);
++void fileinit(void);
++int fileread(struct file *, uint64, int n);
++int filestat(struct file *, uint64 addr);
++int filewrite(struct file *, uint64, int n);
+ 
+ // fs.c
+-void            fsinit(int);
+-int             dirlink(struct inode*, char*, uint);
+-struct inode*   dirlookup(struct inode*, char*, uint*);
+-struct inode*   ialloc(uint, short);
+-struct inode*   idup(struct inode*);
+-void            iinit();
+-void            ilock(struct inode*);
+-void            iput(struct inode*);
+-void            iunlock(struct inode*);
+-void            iunlockput(struct inode*);
+-void            iupdate(struct inode*);
+-int             namecmp(const char*, const char*);
+-struct inode*   namei(char*);
+-struct inode*   nameiparent(char*, char*);
+-int             readi(struct inode*, int, uint64, uint, uint);
+-void            stati(struct inode*, struct stat*);
+-int             writei(struct inode*, int, uint64, uint, uint);
+-void            itrunc(struct inode*);
++void fsinit(int);
++int dirlink(struct inode *, char *, uint);
++struct inode *dirlookup(struct inode *, char *, uint *);
++struct inode *ialloc(uint, short);
++struct inode *idup(struct inode *);
++void iinit();
++void ilock(struct inode *);
++void iput(struct inode *);
++void iunlock(struct inode *);
++void iunlockput(struct inode *);
++void iupdate(struct inode *);
++int namecmp(const char *, const char *);
++struct inode *namei(char *);
++struct inode *nameiparent(char *, char *);
++int readi(struct inode *, int, uint64, uint, uint);
++void stati(struct inode *, struct stat *);
++int writei(struct inode *, int, uint64, uint, uint);
++void itrunc(struct inode *);
+ 
+ // ramdisk.c
+-void            ramdiskinit(void);
+-void            ramdiskintr(void);
+-void            ramdiskrw(struct buf*);
++void ramdiskinit(void);
++void ramdiskintr(void);
++void ramdiskrw(struct buf *);
+ 
+ // kalloc.c
+-void*           kalloc(void);
+-void            kfree(void *);
+-void            kinit(void);
++void *kalloc(void);
++void kfree(void *);
++void kinit(void);
+ 
+ // log.c
+-void            initlog(int, struct superblock*);
+-void            log_write(struct buf*);
+-void            begin_op(void);
+-void            end_op(void);
++void initlog(int, struct superblock *);
++void log_write(struct buf *);
++void begin_op(void);
++void end_op(void);
+ 
+ // pipe.c
+-int             pipealloc(struct file**, struct file**);
+-void            pipeclose(struct pipe*, int);
+-int             piperead(struct pipe*, uint64, int);
+-int             pipewrite(struct pipe*, uint64, int);
++int pipealloc(struct file **, struct file **);
++void pipeclose(struct pipe *, int);
++int piperead(struct pipe *, uint64, int);
++int pipewrite(struct pipe *, uint64, int);
+ 
+ // printf.c
+ #ifdef TEST
+ #define printf(...) _printf(__FILE__, __LINE__, __VA_ARGS__)
+-void            _printf(const char*, unsigned int, char*, ... );
++void _printf(const char *, unsigned int, char *, ...);
+ #else
+ #define printf(...) _printf(__VA_ARGS__)
+-void            _printf(char*, ... );
++void _printf(char *, ...);
+ #endif
+ 
+ #define exit_info(...) info_with_color(__VA_ARGS__)
+-void            info_with_color(char*, ... );
++void info_with_color(char *, ...);
+ 
+-void            panic(char*) __attribute__((noreturn));
+-void            printfinit(void);
++void panic(char *) __attribute__((noreturn));
++void printfinit(void);
+ 
+ // proc.c
+-int             cpuid(void);
+-void            exit(int);
+-int             fork(void);
+-int             growproc(int);
+-pagetable_t     proc_pagetable(struct proc *);
+-void            proc_freepagetable(pagetable_t, uint64);
+-int             kill(int);
+-struct cpu*     mycpu(void);
+-struct cpu*     getmycpu(void);
+-struct proc*    myproc();
+-void            procinit(void);
+-void            scheduler(void) __attribute__((noreturn));
+-void            sched(void);
+-void            setproc(struct proc*);
+-void            sleep(void*, struct spinlock*);
+-void            userinit(void);
+-int             wait(uint64);
+-void            wakeup(void*);
+-void            yield(void);
+-int             either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
+-int             either_copyin(void *dst, int user_src, uint64 src, uint64 len);
+-void            procdump(void);
++int cpuid(void);
++void exit(int);
++int fork(void);
++int growproc(int);
++pagetable_t proc_pagetable(struct proc *);
++void proc_freepagetable(pagetable_t, uint64);
++int kill(int);
++struct cpu *mycpu(void);
++struct cpu *getmycpu(void);
++struct proc *myproc();
++void procinit(void);
++void scheduler(void) __attribute__((noreturn));
++void sched(void);
++void setproc(struct proc *);
++void sleep(void *, struct spinlock *);
++void userinit(void);
++int wait(uint64, int);
++void wakeup(void *);
++void yield(void);
++int either_copyout(int user_dst, uint64 dst, void *src, uint64 len);
++int either_copyin(void *dst, int user_src, uint64 src, uint64 len);
++void procdump(void);
+ 
+ // swtch.S
+-void            swtch(struct context*, struct context*);
++void swtch(struct context *, struct context *);
+ 
+ // spinlock.c
+-void            acquire(struct spinlock*);
+-int             holding(struct spinlock*);
+-void            initlock(struct spinlock*, char*);
+-void            release(struct spinlock*);
+-void            push_off(void);
+-void            pop_off(void);
++void acquire(struct spinlock *);
++int holding(struct spinlock *);
++void initlock(struct spinlock *, char *);
++void release(struct spinlock *);
++void push_off(void);
++void pop_off(void);
+ 
+ // sleeplock.c
+-void            acquiresleep(struct sleeplock*);
+-void            releasesleep(struct sleeplock*);
+-int             holdingsleep(struct sleeplock*);
+-void            initsleeplock(struct sleeplock*, char*);
++void acquiresleep(struct sleeplock *);
++void releasesleep(struct sleeplock *);
++int holdingsleep(struct sleeplock *);
++void initsleeplock(struct sleeplock *, char *);
+ 
+ // string.c
+-int             memcmp(const void*, const void*, uint);
+-void*           memmove(void*, const void*, uint);
+-void*           memset(void*, int, uint);
+-char*           safestrcpy(char*, const char*, int);
+-int             strlen(const char*);
+-int             strncmp(const char*, const char*, uint);
+-char*           strncpy(char*, const char*, int);
++int memcmp(const void *, const void *, uint);
++void *memmove(void *, const void *, uint);
++void *memset(void *, int, uint);
++char *safestrcpy(char *, const char *, int);
++int strlen(const char *);
++int strncmp(const char *, const char *, uint);
++char *strncpy(char *, const char *, int);
+ 
+ // syscall.c
+-int             argint(int, int*);
+-int             argstr(int, char*, int);
+-int             argaddr(int, uint64 *);
+-int             fetchstr(uint64, char*, int);
+-int             fetchaddr(uint64, uint64*);
+-void            syscall();
++int argint(int, int *);
++int argstr(int, char *, int);
++int argaddr(int, uint64 *);
++int fetchstr(uint64, char *, int);
++int fetchaddr(uint64, uint64 *);
++void syscall();
+ 
+ // trap.c
+-extern uint     ticks;
+-void            trapinit(void);
+-void            trapinithart(void);
++extern uint ticks;
++void trapinit(void);
++void trapinithart(void);
+ extern struct spinlock tickslock;
+-void            usertrapret(void);
++void usertrapret(void);
+ 
+ // uart.c
+-void            uartinit(void);
+-void            uartintr(void);
+-void            uartputc(int);
+-void            uartputc_sync(int);
+-int             uartgetc(void);
++void uartinit(void);
++void uartintr(void);
++void uartputc(int);
++void uartputc_sync(int);
++int uartgetc(void);
+ 
+ // vm.c
+-void            kvminit(void);
+-void            kvminithart(void);
+-uint64          kvmpa(uint64);
+-void            kvmmap(uint64, uint64, uint64, int);
+-int             mappages(pagetable_t, uint64, uint64, uint64, int);
+-pagetable_t     uvmcreate(void);
+-void            uvminit(pagetable_t, uchar *, uint);
+-uint64          uvmalloc(pagetable_t, uint64, uint64);
+-uint64          uvmdealloc(pagetable_t, uint64, uint64);
+-int             uvmcopy(pagetable_t, pagetable_t, uint64);
+-void            uvmfree(pagetable_t, uint64);
+-void            uvmunmap(pagetable_t, uint64, uint64, int);
+-void            uvmclear(pagetable_t, uint64);
+-uint64          walkaddr(pagetable_t, uint64);
+-int             copyout(pagetable_t, uint64, char *, uint64);
+-int             copyin(pagetable_t, char *, uint64, uint64);
+-int             copyinstr(pagetable_t, char *, uint64, uint64);
++void kvminit(void);
++void kvminithart(void);
++uint64 kvmpa(uint64);
++void kvmmap(uint64, uint64, uint64, int);
++int mappages(pagetable_t, uint64, uint64, uint64, int);
++pagetable_t uvmcreate(void);
++void uvminit(pagetable_t, uchar *, uint);
++uint64 uvmalloc(pagetable_t, uint64, uint64);
++uint64 uvmdealloc(pagetable_t, uint64, uint64);
++int uvmcopy(pagetable_t, pagetable_t, uint64);
++void uvmfree(pagetable_t, uint64);
++void uvmunmap(pagetable_t, uint64, uint64, int);
++void uvmclear(pagetable_t, uint64);
++uint64 walkaddr(pagetable_t, uint64);
++int copyout(pagetable_t, uint64, char *, uint64);
++int copyin(pagetable_t, char *, uint64, uint64);
++int copyinstr(pagetable_t, char *, uint64, uint64);
+ 
+ // plic.c
+-void            plicinit(void);
+-void            plicinithart(void);
+-int             plic_claim(void);
+-void            plic_complete(int);
++void plicinit(void);
++void plicinithart(void);
++int plic_claim(void);
++void plic_complete(int);
+ 
+ // virtio_disk.c
+-void            virtio_disk_init(void);
+-void            virtio_disk_rw(struct buf *, int);
+-void            virtio_disk_intr(void);
++void virtio_disk_init(void);
++void virtio_disk_rw(struct buf *, int);
++void virtio_disk_intr(void);
+ 
+ // number of elements in fixed-size array
+-#define NELEM(x) (sizeof(x)/sizeof((x)[0]))
++#define NELEM(x) (sizeof(x) / sizeof((x)[0]))
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 1607145..d367965 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -296,7 +296,9 @@ void reparent(struct proc *p) {
+ // until its parent calls wait().
+ void exit(int status) {
+   struct proc *p = myproc();
+-
++  static char *states[] = {
++      [UNUSED] "unused", [SLEEPING] "sleep ", [RUNNABLE] "runble", [RUNNING] "run   ", [ZOMBIE] "zombie"};
++  char *state;
+   if (p == initproc) panic("init exiting");
+ 
+   // Close all open files.
+@@ -330,6 +332,9 @@ void exit(int status) {
+   // as anything else.
+   acquire(&p->lock);
+   struct proc *original_parent = p->parent;
++  state = states[original_parent->state];
++  exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, original_parent->pid, original_parent->name,
++            state);
+   release(&p->lock);
+ 
+   // we need the parent's lock in order to wake it up from wait().
+@@ -337,10 +342,19 @@ void exit(int status) {
+   acquire(&original_parent->lock);
+ 
+   acquire(&p->lock);
+-
++  struct proc *pp;
++  int i = 0;
++  for (pp = proc; pp < &proc[NPROC]; pp++) {  //&proc[]
++    if (pp->parent == p) {
++      acquire(&pp->lock);
++      state = states[pp->state];
++      exit_info("proc %d exit, child %d, pid %d, name child%d, state %s\n", p->pid, i, pp->pid, i, state);
++      release(&pp->lock);
++      i++;
++    }
++  }
+   // Give any children to init.
+   reparent(p);
+-
+   // Parent might be sleeping in wait().
+   wakeup1(original_parent);
+ 
+@@ -356,7 +370,7 @@ void exit(int status) {
+ 
+ // Wait for a child process to exit and return its pid.
+ // Return -1 if this process has no children.
+-int wait(uint64 addr) {
++int wait(uint64 addr, int flag) {
+   struct proc *np;
+   int havekids, pid;
+   struct proc *p = myproc();
+@@ -401,7 +415,12 @@ int wait(uint64 addr) {
+     }
+ 
+     // Wait for a child to exit.
+-    sleep(p, &p->lock);  // DOC: wait-sleep
++    if (flag != 1) {
++      sleep(p, &p->lock);  // DOC: wait-sleep
++    } else {
++      release(&p->lock);
++      return -1;
++    }
+   }
+ }
+ 
+diff --git a/kernel/syscall.c b/kernel/syscall.c
+index 4c97875..f924808 100644
+--- a/kernel/syscall.c
++++ b/kernel/syscall.c
+@@ -89,6 +89,7 @@ extern uint64 sys_wait(void);
+ extern uint64 sys_write(void);
+ extern uint64 sys_uptime(void);
+ extern uint64 sys_rename(void);
++extern uint64 sys_yield(void);
+ 
+ static uint64 (*syscalls[])(void) = {
+     [SYS_fork] sys_fork,   [SYS_exit] sys_exit,     [SYS_wait] sys_wait,     [SYS_pipe] sys_pipe,
+@@ -96,8 +97,7 @@ static uint64 (*syscalls[])(void) = {
+     [SYS_chdir] sys_chdir, [SYS_dup] sys_dup,       [SYS_getpid] sys_getpid, [SYS_sbrk] sys_sbrk,
+     [SYS_sleep] sys_sleep, [SYS_uptime] sys_uptime, [SYS_open] sys_open,     [SYS_write] sys_write,
+     [SYS_mknod] sys_mknod, [SYS_unlink] sys_unlink, [SYS_link] sys_link,     [SYS_mkdir] sys_mkdir,
+-    [SYS_close] sys_close, [SYS_rename] sys_rename,
+-};
++    [SYS_close] sys_close, [SYS_rename] sys_rename, [SYS_yield] sys_yield};
+ 
+ void syscall(void) {
+   int num;
+diff --git a/kernel/syscall.h b/kernel/syscall.h
+index 6998f87..bb4bc08 100644
+--- a/kernel/syscall.h
++++ b/kernel/syscall.h
+@@ -1,23 +1,24 @@
+ // System call numbers
+-#define SYS_fork    1
+-#define SYS_exit    2
+-#define SYS_wait    3
+-#define SYS_pipe    4
+-#define SYS_read    5
+-#define SYS_kill    6
+-#define SYS_exec    7
+-#define SYS_fstat   8
+-#define SYS_chdir   9
+-#define SYS_dup    10
++#define SYS_fork 1
++#define SYS_exit 2
++#define SYS_wait 3
++#define SYS_pipe 4
++#define SYS_read 5
++#define SYS_kill 6
++#define SYS_exec 7
++#define SYS_fstat 8
++#define SYS_chdir 9
++#define SYS_dup 10
+ #define SYS_getpid 11
+-#define SYS_sbrk   12
+-#define SYS_sleep  13
++#define SYS_sbrk 12
++#define SYS_sleep 13
+ #define SYS_uptime 14
+-#define SYS_open   15
+-#define SYS_write  16
+-#define SYS_mknod  17
++#define SYS_open 15
++#define SYS_write 16
++#define SYS_mknod 17
+ #define SYS_unlink 18
+-#define SYS_link   19
+-#define SYS_mkdir  20
+-#define SYS_close  21
++#define SYS_link 19
++#define SYS_mkdir 20
++#define SYS_close 21
+ #define SYS_rename 22
++#define SYS_yield 23
+diff --git a/kernel/sysinfo.h b/kernel/sysinfo.h
+index fb878e6..cb085c1 100644
+--- a/kernel/sysinfo.h
++++ b/kernel/sysinfo.h
+@@ -1,4 +1,4 @@
+ struct sysinfo {
+-  uint64 freemem;   // amount of free memory (bytes)
+-  uint64 nproc;     // number of process
++  uint64 freemem;  // amount of free memory (bytes)
++  uint64 nproc;    // number of process
+ };
+diff --git a/kernel/sysproc.c b/kernel/sysproc.c
+index a69071e..f54def0 100644
+--- a/kernel/sysproc.c
++++ b/kernel/sysproc.c
+@@ -20,8 +20,10 @@ uint64 sys_fork(void) { return fork(); }
+ 
+ uint64 sys_wait(void) {
+   uint64 p;
++  int pp;
+   if (argaddr(0, &p) < 0) return -1;
+-  return wait(p);
++  argint(1, &pp);
++  return wait(p, pp);
+ }
+ 
+ uint64 sys_sbrk(void) {
+@@ -81,3 +83,11 @@ uint64 sys_rename(void) {
+   p->name[len] = '\0';
+   return 0;
+ }
++
++uint64 sys_yield(void) {
++  int pp;
++  pp = myproc()->trapframe->epc;
++  printf("start to yield, user pc %p\n", pp);
++  yield();
++  return 0;
++}
+diff --git a/time.txt b/time.txt
+new file mode 100644
+index 0000000..e440e5c
+--- /dev/null
++++ b/time.txt
+@@ -0,0 +1 @@
++3
+\ No newline at end of file
+diff --git a/user/user.h b/user/user.h
+index ec47d9d..3f277fb 100644
+--- a/user/user.h
++++ b/user/user.h
+@@ -4,40 +4,41 @@ struct rtcdate;
+ // system calls
+ int fork(void);
+ int exit(int) __attribute__((noreturn));
+-int wait(int*, int);
+-int pipe(int*);
+-int write(int, const void*, int);
+-int read(int, void*, int);
++int wait(int *, int);
++int pipe(int *);
++int write(int, const void *, int);
++int read(int, void *, int);
+ int close(int);
+ int kill(int);
+-int exec(char*, char**);
+-int open(const char*, int);
+-int mknod(const char*, short, short);
+-int unlink(const char*);
+-int fstat(int fd, struct stat*);
+-int link(const char*, const char*);
+-int mkdir(const char*);
+-int chdir(const char*);
++int exec(char *, char **);
++int open(const char *, int);
++int mknod(const char *, short, short);
++int unlink(const char *);
++int fstat(int fd, struct stat *);
++int link(const char *, const char *);
++int mkdir(const char *);
++int chdir(const char *);
+ int dup(int);
+ int getpid(void);
+-char* sbrk(int);
++char *sbrk(int);
+ int sleep(int);
+ int uptime(void);
+-int rename(const char*);
++int rename(const char *);
++int yield();
+ 
+ // ulib.c
+-int stat(const char*, struct stat*);
+-char* strcpy(char*, const char*);
+-void *memmove(void*, const void*, int);
+-char* strchr(const char*, char c);
+-int strcmp(const char*, const char*);
+-void fprintf(int, const char*, ...);
+-void printf(const char*, ...);
+-char* gets(char*, int max);
+-uint strlen(const char*);
+-void* memset(void*, int, uint);
+-void* malloc(uint);
+-void free(void*);
+-int atoi(const char*);
++int stat(const char *, struct stat *);
++char *strcpy(char *, const char *);
++void *memmove(void *, const void *, int);
++char *strchr(const char *, char c);
++int strcmp(const char *, const char *);
++void fprintf(int, const char *, ...);
++void printf(const char *, ...);
++char *gets(char *, int max);
++uint strlen(const char *);
++void *memset(void *, int, uint);
++void *malloc(uint);
++void free(void *);
++int atoi(const char *);
+ int memcmp(const void *, const void *, uint);
+ void *memcpy(void *, const void *, uint);
+diff --git a/user/usys.pl b/user/usys.pl
+index 3a2f6c4..374c8e3 100755
+--- a/user/usys.pl
++++ b/user/usys.pl
+@@ -37,3 +37,4 @@ entry("sbrk");
+ entry("sleep");
+ entry("uptime");
+ entry("rename");
++entry("yield")
