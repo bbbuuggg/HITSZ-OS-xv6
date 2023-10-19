@@ -296,7 +296,9 @@ void reparent(struct proc *p) {
 // until its parent calls wait().
 void exit(int status) {
   struct proc *p = myproc();
-
+  static char *states[] = {
+      [UNUSED] "unused", [SLEEPING] "sleep ", [RUNNABLE] "runble", [RUNNING] "run   ", [ZOMBIE] "zombie"};
+  char *state;
   if (p == initproc) panic("init exiting");
 
   // Close all open files.
@@ -330,6 +332,9 @@ void exit(int status) {
   // as anything else.
   acquire(&p->lock);
   struct proc *original_parent = p->parent;
+  state = states[original_parent->state];
+  exit_info("proc %d exit, parent pid %d, name %s, state %s\n", p->pid, original_parent->pid, original_parent->name,
+            state);
   release(&p->lock);
 
   // we need the parent's lock in order to wake it up from wait().
@@ -337,10 +342,19 @@ void exit(int status) {
   acquire(&original_parent->lock);
 
   acquire(&p->lock);
-
+  struct proc *pp;
+  int i = 0;
+  for (pp = proc; pp < &proc[NPROC]; pp++) {  //&proc[]
+    if (pp->parent == p) {
+      acquire(&pp->lock);
+      state = states[pp->state];
+      exit_info("proc %d exit, child %d, pid %d, name child%d, state %s\n", p->pid, i, pp->pid, i, state);
+      release(&pp->lock);
+      i++;
+    }
+  }
   // Give any children to init.
   reparent(p);
-
   // Parent might be sleeping in wait().
   wakeup1(original_parent);
 
@@ -356,7 +370,7 @@ void exit(int status) {
 
 // Wait for a child process to exit and return its pid.
 // Return -1 if this process has no children.
-int wait(uint64 addr) {
+int wait(uint64 addr, int flag) {
   struct proc *np;
   int havekids, pid;
   struct proc *p = myproc();
@@ -401,7 +415,12 @@ int wait(uint64 addr) {
     }
 
     // Wait for a child to exit.
-    sleep(p, &p->lock);  // DOC: wait-sleep
+    if (flag != 1) {
+      sleep(p, &p->lock);  // DOC: wait-sleep
+    } else {
+      release(&p->lock);
+      return -1;
+    }
   }
 }
 
