@@ -1,3 +1,408 @@
+diff --git a/.vscode/settings.json b/.vscode/settings.json
+new file mode 100644
+index 0000000..70e34ec
+--- /dev/null
++++ b/.vscode/settings.json
+@@ -0,0 +1,3 @@
++{
++    "C_Cpp.errorSquiggles": "disabled"
++}
+\ No newline at end of file
+diff --git a/commit.patch b/commit.patch
+new file mode 100644
+index 0000000..da37090
+--- /dev/null
++++ b/commit.patch
+@@ -0,0 +1,98 @@
++diff --git a/kernel/spinlock.c b/kernel/spinlock.c
++index b4d026d..dd0ed53 100644
++--- a/kernel/spinlock.c
+++++ b/kernel/spinlock.c
++@@ -174,6 +174,7 @@ int
++ statslock(char *buf, int sz) {
++   int n;
++   int tot = 0;
+++  int found = 0;
++ 
++   acquire(&lock_locks);
++   n = snprintf(buf, sz, "--- lock kmem/bcache stats\n");
++@@ -184,8 +185,14 @@ statslock(char *buf, int sz) {
++        strncmp(locks[i]->name, "kmem", strlen("kmem")) == 0) {
++       tot += locks[i]->nts;
++       n += snprint_lock(buf +n, sz-n, locks[i]);
+++      found += 1;
++     }
++   }
+++
+++  // Require at least two locks name after kmem/bcache.
+++  if (found < 2) {
+++    tot = -1;
+++  }
++   
++   n += snprintf(buf+n, sz-n, "--- top 5 contended locks:\n");
++   int last = 100000000;
++diff --git a/user/bcachetest.c b/user/bcachetest.c
++index cea31d8..c24aea7 100644
++--- a/user/bcachetest.c
+++++ b/user/bcachetest.c
++@@ -133,10 +133,17 @@ test0()
++   }
++   printf("test0 results:\n");
++   n = ntas(1);
++-  if (n-m < 500)
++-    printf("test0: OK\n");
+++  if (n == -1) {
+++    printf("test0 FAIL\n");
+++    printf("tot = -1, make sure you have both lock 'kmem*' and 'bcache*'\n");
+++  }
++   else
++-    printf("test0: FAIL\n");
+++  {
+++    if (n-m < 500)
+++      printf("test0: OK\n");
+++    else
+++      printf("test0: FAIL\n");
+++  }
++ }
++ 
++ void test1()
++diff --git a/user/kalloctest.c b/user/kalloctest.c
++index 1db5025..bb65fe6 100644
++--- a/user/kalloctest.c
+++++ b/user/kalloctest.c
++@@ -68,10 +68,17 @@ void test1(void)
++   }
++   printf("test1 results:\n");
++   n = ntas(1);
++-  if(n-m < 10) 
++-    printf("test1 OK\n");
++-  else
+++  if (n == -1) {
++     printf("test1 FAIL\n");
+++    printf("tot = -1, make sure you have both lock 'kmem*' and 'bcache*'\n");
+++  }
+++  else
+++  {
+++    if (n - m < 10)
+++      printf("test1 OK\n");
+++    else
+++      printf("test1 FAIL\n");
+++  }
++ }
++ 
++ //
++diff --git a/user/ulib.c b/user/ulib.c
++index 4775939..ddb828b 100644
++--- a/user/ulib.c
+++++ b/user/ulib.c
++@@ -89,10 +89,15 @@ atoi(const char *s)
++ {
++   int n;
++ 
+++  int sign = 1;
+++  if (*s == '-') {
+++    sign = -1;
+++    s++;
+++  }
++   n = 0;
++   while('0' <= *s && *s <= '9')
++     n = n*10 + *s++ - '0';
++-  return n;
+++  return n * sign;
++ }
++ 
++ void*
+diff --git a/kernel/bio.c b/kernel/bio.c
+index 60d91a6..7fb892a 100644
+--- a/kernel/bio.c
++++ b/kernel/bio.c
+@@ -22,33 +22,41 @@
+ #include "defs.h"
+ #include "fs.h"
+ #include "buf.h"
+-
++//哈希桶的方法
++int
++hash(int blockno){
++  return blockno % 13;//看了下貌似NBUF是30,但是我用15又跑不通、、、
++}
+ struct {
+-  struct spinlock lock;
++  struct spinlock lock[13];//个锁
+   struct buf buf[NBUF];
+ 
+   // Linked list of all buffers, through prev/next.
+   // Sorted by how recently the buffer was used.
+   // head.next is most recent, head.prev is least.
+-  struct buf head;
++  // struct buf head;
++  struct buf hasht[13];//13个桶
+ } bcache;
+ 
+ void
+ binit(void)
+ {
+   struct buf *b;
+-
+-  initlock(&bcache.lock, "bcache");
+-
+-  // Create linked list of buffers
+-  bcache.head.prev = &bcache.head;
+-  bcache.head.next = &bcache.head;
++  for(int i=0;i<13;i++){//13个桶13个锁
++    initlock(&bcache.lock[i],"bcache");
++    // Create linked list of buffers
++    bcache.hasht[i].prev = &bcache.hasht[i];
++    bcache.hasht[i].next = &bcache.hasht[i];
++  }
++  int i = 0;
++  //添加链表
+   for(b = bcache.buf; b < bcache.buf+NBUF; b++){
+-    b->next = bcache.head.next;
+-    b->prev = &bcache.head;
++    b->next = bcache.hasht[i*13/NBUF].next;//这里想平均分到桶里，他这里应该还是用的NBUF计数，那b/（NBUF/13）应该可以表示当前塞得桶
++    b->prev = &bcache.hasht[i*13/NBUF];
+     initsleeplock(&b->lock, "buffer");
+-    bcache.head.next->prev = b;
+-    bcache.head.next = b;
++    bcache.hasht[i*13/NBUF].next->prev = b;
++    bcache.hasht[i*13/NBUF].next = b;
++    i++;
+   }
+ }
+ 
+@@ -58,15 +66,18 @@ binit(void)
+ static struct buf*
+ bget(uint dev, uint blockno)
+ {
++  //获取桶号
++  int num = hash(blockno);
+   struct buf *b;
++  int bingo = 0;//命中标记位
+ 
+-  acquire(&bcache.lock);
++  acquire(&bcache.lock[num]);
+ 
+   // Is the block already cached?
+-  for(b = bcache.head.next; b != &bcache.head; b = b->next){
++  for(b = bcache.hasht[num].next; b != &bcache.hasht[num]; b = b->next){
+     if(b->dev == dev && b->blockno == blockno){
+       b->refcnt++;
+-      release(&bcache.lock);
++      release(&bcache.lock[num]);
+       acquiresleep(&b->lock);
+       return b;
+     }
+@@ -74,20 +85,68 @@ bget(uint dev, uint blockno)
+ 
+   // Not cached.
+   // Recycle the least recently used (LRU) unused buffer.
+-  for(b = bcache.head.prev; b != &bcache.head; b = b->prev){
++  for(b = bcache.hasht[num].prev; b != &bcache.hasht[num]; b = b->prev){
+     if(b->refcnt == 0) {
+       b->dev = dev;
+       b->blockno = blockno;
+       b->valid = 0;
+       b->refcnt = 1;
+-      release(&bcache.lock);
++      bingo = 1;
++      release(&bcache.lock[num]);
+       acquiresleep(&b->lock);
+       return b;
+     }
+   }
++  
++  if (!bingo) {
++    for (int i = 0; ; i = (i + 1) % 13) {//13个桶
++      if(i == num)
++        continue;
++      acquire(&bcache.lock[i]);
++      for(b = bcache.hasht[i].prev; b != &bcache.hasht[i]; b = b->prev){
++        if(b->refcnt == 0) {
++        //   b->dev = dev;
++        //   b->blockno = blockno;
++        //   b->valid = 0;
++        //   b->refcnt = 1;
++        //   bingo = 1;
++        //   release(&bcache.lock[i]);
++        //   acquiresleep(&b->lock);
++        //   release(&bcache.lock[num]);
++        //   return b;
++        //淦！不能这么写，for循环里面return了之后总会有锁没有release，代码量一大全是炸弹、、、
++        //取出来
++          b->prev->next = b->next;
++          b->next->prev = b->prev;
++          bingo = 1;
++          release(&bcache.lock[i]);
++          break;
++        }
++      }
++      if(!bingo){
++        release(&bcache.lock[i]);//接着找
++      }else{
++        break;
++      }
++    }
++  }
++  if(bingo){
++    b->next = bcache.hasht[num].next;
++    b->prev = &bcache.hasht[num];
++    bcache.hasht[num].next->prev = b;
++    bcache.hasht[num].next = b;
++    b->dev = dev;
++    b->blockno = blockno;
++    b->valid = 0;
++    b->refcnt = 1;
++    release(&bcache.lock[num]);
++    acquiresleep(&b->lock);
++    return b;
++  }
+   panic("bget: no buffers");
+ }
+ 
++
+ // Return a locked buf with the contents of the indicated block.
+ struct buf*
+ bread(uint dev, uint blockno)
+@@ -116,38 +175,39 @@ bwrite(struct buf *b)
+ void
+ brelse(struct buf *b)
+ {
++  int num = hash(b->blockno);
+   if(!holdingsleep(&b->lock))
+     panic("brelse");
+ 
+   releasesleep(&b->lock);
+ 
+-  acquire(&bcache.lock);
++  acquire(&bcache.lock[num]);
+   b->refcnt--;
+   if (b->refcnt == 0) {
+     // no one is waiting for it.
+     b->next->prev = b->prev;
+     b->prev->next = b->next;
+-    b->next = bcache.head.next;
+-    b->prev = &bcache.head;
+-    bcache.head.next->prev = b;
+-    bcache.head.next = b;
++    b->next = bcache.hasht[num].next;
++    b->prev = &bcache.hasht[num];
++    bcache.hasht[num].next->prev = b;
++    bcache.hasht[num].next = b;
+   }
+   
+-  release(&bcache.lock);
++  release(&bcache.lock[num]);
+ }
+ 
+ void
+ bpin(struct buf *b) {
+-  acquire(&bcache.lock);
++  int num = hash(b->blockno);
++  acquire(&bcache.lock[num]);
+   b->refcnt++;
+-  release(&bcache.lock);
++  release(&bcache.lock[num]);
+ }
+ 
+ void
+ bunpin(struct buf *b) {
+-  acquire(&bcache.lock);
++  int num = hash(b->blockno);
++  acquire(&bcache.lock[num]);
+   b->refcnt--;
+-  release(&bcache.lock);
++  release(&bcache.lock[num]);
+ }
+-
+-
+diff --git a/kernel/kalloc.c b/kernel/kalloc.c
+index fa6a0ac..68509b9 100644
+--- a/kernel/kalloc.c
++++ b/kernel/kalloc.c
+@@ -18,15 +18,21 @@ struct run {
+   struct run *next;
+ };
+ 
+-struct {
++struct kmem{//按原本那么写会报错？？？？？
+   struct spinlock lock;
+   struct run *freelist;
+-} kmem;
++};
++struct kmem kmems[NCPU];//一个cpu一个链表
++
++
+ 
+ void
+-kinit()
++kinit()//不知道为啥那种kmem_%d用snprint的那种跑不通
+ {
+-  initlock(&kmem.lock, "kmem");
++  for(int i=0;i<NCPU;i++)
++  {
++    initlock(&kmems[i].lock, "kmem");
++  }
+   freerange(end, (void*)PHYSTOP);
+ }
+ 
+@@ -56,10 +62,15 @@ kfree(void *pa)
+ 
+   r = (struct run*)pa;
+ 
+-  acquire(&kmem.lock);
+-  r->next = kmem.freelist;
+-  kmem.freelist = r;
+-  release(&kmem.lock);
++  //获取cpuid
++  push_off();
++  int cpu_id = cpuid();//貌似先申请变量会报错，编译器抽风吧可能
++  pop_off();
++  //给当前的cpu链表续上就好了
++  acquire(&kmems[cpu_id].lock);
++  r->next = kmems[cpu_id].freelist;
++  kmems[cpu_id].freelist = r;
++  release(&kmems[cpu_id].lock);
+ }
+ 
+ // Allocate one 4096-byte page of physical memory.
+@@ -69,12 +80,31 @@ void *
+ kalloc(void)
+ {
+   struct run *r;
++  //获取cpuid号
++  push_off();
++  int cpu_id = cpuid();
++  pop_off();
+ 
+-  acquire(&kmem.lock);
+-  r = kmem.freelist;
+-  if(r)
+-    kmem.freelist = r->next;
+-  release(&kmem.lock);
++  acquire(&kmems[cpu_id].lock);
++  r = kmems[cpu_id].freelist;
++  if(r){//当前就够用
++    kmems[cpu_id].freelist = r->next;
++    release(&kmems[cpu_id].lock);
++  }else{//要窃取
++    release(&kmems[cpu_id].lock);
++    for(int i = 0; i<NCPU ; i++){//&& i != cpu_id加这个貌似会提前结束for循环
++      if(i == cpu_id)
++        continue;
++      acquire(&kmems[i].lock);
++      r = kmems[i].freelist;
++      if(r){
++        kmems[i].freelist = r->next;
++        release(&kmems[i].lock);
++        break;
++      }
++      release(&kmems[i].lock);
++    }
++  }
+ 
+   if(r)
+     memset((char*)r, 5, PGSIZE); // fill with junk
 diff --git a/kernel/spinlock.c b/kernel/spinlock.c
 index b4d026d..dd0ed53 100644
 --- a/kernel/spinlock.c
@@ -25,6 +430,14 @@ index b4d026d..dd0ed53 100644
    
    n += snprintf(buf+n, sz-n, "--- top 5 contended locks:\n");
    int last = 100000000;
+diff --git a/time.txt b/time.txt
+new file mode 100644
+index 0000000..7813681
+--- /dev/null
++++ b/time.txt
+@@ -0,0 +1 @@
++5
+\ No newline at end of file
 diff --git a/user/bcachetest.c b/user/bcachetest.c
 index cea31d8..c24aea7 100644
 --- a/user/bcachetest.c
