@@ -18,15 +18,21 @@ struct run {
   struct run *next;
 };
 
-struct {
+struct kmem{//按原本那么写会报错？？？？？
   struct spinlock lock;
   struct run *freelist;
-} kmem;
+};
+struct kmem kmems[NCPU];//一个cpu一个链表
+
+
 
 void
-kinit()
+kinit()//不知道为啥那种kmem_%d用snprint的那种跑不通
 {
-  initlock(&kmem.lock, "kmem");
+  for(int i=0;i<NCPU;i++)
+  {
+    initlock(&kmems[i].lock, "kmem");
+  }
   freerange(end, (void*)PHYSTOP);
 }
 
@@ -56,10 +62,15 @@ kfree(void *pa)
 
   r = (struct run*)pa;
 
-  acquire(&kmem.lock);
-  r->next = kmem.freelist;
-  kmem.freelist = r;
-  release(&kmem.lock);
+  //获取cpuid
+  push_off();
+  int cpu_id = cpuid();//貌似先申请变量会报错，编译器抽风吧可能
+  pop_off();
+  //给当前的cpu链表续上就好了
+  acquire(&kmems[cpu_id].lock);
+  r->next = kmems[cpu_id].freelist;
+  kmems[cpu_id].freelist = r;
+  release(&kmems[cpu_id].lock);
 }
 
 // Allocate one 4096-byte page of physical memory.
@@ -69,12 +80,31 @@ void *
 kalloc(void)
 {
   struct run *r;
+  //获取cpuid号
+  push_off();
+  int cpu_id = cpuid();
+  pop_off();
 
-  acquire(&kmem.lock);
-  r = kmem.freelist;
-  if(r)
-    kmem.freelist = r->next;
-  release(&kmem.lock);
+  acquire(&kmems[cpu_id].lock);
+  r = kmems[cpu_id].freelist;
+  if(r){//当前就够用
+    kmems[cpu_id].freelist = r->next;
+    release(&kmems[cpu_id].lock);
+  }else{//要窃取
+    release(&kmems[cpu_id].lock);
+    for(int i = 0; i<NCPU ; i++){//&& i != cpu_id加这个貌似会提前结束for循环
+      if(i == cpu_id)
+        continue;
+      acquire(&kmems[i].lock);
+      r = kmems[i].freelist;
+      if(r){
+        kmems[i].freelist = r->next;
+        release(&kmems[i].lock);
+        break;
+      }
+      release(&kmems[i].lock);
+    }
+  }
 
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk

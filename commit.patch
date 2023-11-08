@@ -1,0 +1,98 @@
+diff --git a/kernel/spinlock.c b/kernel/spinlock.c
+index b4d026d..dd0ed53 100644
+--- a/kernel/spinlock.c
++++ b/kernel/spinlock.c
+@@ -174,6 +174,7 @@ int
+ statslock(char *buf, int sz) {
+   int n;
+   int tot = 0;
++  int found = 0;
+ 
+   acquire(&lock_locks);
+   n = snprintf(buf, sz, "--- lock kmem/bcache stats\n");
+@@ -184,8 +185,14 @@ statslock(char *buf, int sz) {
+        strncmp(locks[i]->name, "kmem", strlen("kmem")) == 0) {
+       tot += locks[i]->nts;
+       n += snprint_lock(buf +n, sz-n, locks[i]);
++      found += 1;
+     }
+   }
++
++  // Require at least two locks name after kmem/bcache.
++  if (found < 2) {
++    tot = -1;
++  }
+   
+   n += snprintf(buf+n, sz-n, "--- top 5 contended locks:\n");
+   int last = 100000000;
+diff --git a/user/bcachetest.c b/user/bcachetest.c
+index cea31d8..c24aea7 100644
+--- a/user/bcachetest.c
++++ b/user/bcachetest.c
+@@ -133,10 +133,17 @@ test0()
+   }
+   printf("test0 results:\n");
+   n = ntas(1);
+-  if (n-m < 500)
+-    printf("test0: OK\n");
++  if (n == -1) {
++    printf("test0 FAIL\n");
++    printf("tot = -1, make sure you have both lock 'kmem*' and 'bcache*'\n");
++  }
+   else
+-    printf("test0: FAIL\n");
++  {
++    if (n-m < 500)
++      printf("test0: OK\n");
++    else
++      printf("test0: FAIL\n");
++  }
+ }
+ 
+ void test1()
+diff --git a/user/kalloctest.c b/user/kalloctest.c
+index 1db5025..bb65fe6 100644
+--- a/user/kalloctest.c
++++ b/user/kalloctest.c
+@@ -68,10 +68,17 @@ void test1(void)
+   }
+   printf("test1 results:\n");
+   n = ntas(1);
+-  if(n-m < 10) 
+-    printf("test1 OK\n");
+-  else
++  if (n == -1) {
+     printf("test1 FAIL\n");
++    printf("tot = -1, make sure you have both lock 'kmem*' and 'bcache*'\n");
++  }
++  else
++  {
++    if (n - m < 10)
++      printf("test1 OK\n");
++    else
++      printf("test1 FAIL\n");
++  }
+ }
+ 
+ //
+diff --git a/user/ulib.c b/user/ulib.c
+index 4775939..ddb828b 100644
+--- a/user/ulib.c
++++ b/user/ulib.c
+@@ -89,10 +89,15 @@ atoi(const char *s)
+ {
+   int n;
+ 
++  int sign = 1;
++  if (*s == '-') {
++    sign = -1;
++    s++;
++  }
+   n = 0;
+   while('0' <= *s && *s <= '9')
+     n = n*10 + *s++ - '0';
+-  return n;
++  return n * sign;
+ }
+ 
+ void*
