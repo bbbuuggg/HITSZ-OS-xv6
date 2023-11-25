@@ -1,0 +1,572 @@
+diff --git a/.vscode/tasks.json b/.vscode/tasks.json
+new file mode 100644
+index 0000000..5d4653d
+--- /dev/null
++++ b/.vscode/tasks.json
+@@ -0,0 +1,28 @@
++{
++    "tasks": [
++        {
++            "type": "cppbuild",
++            "label": "C/C++: gcc 生成活动文件",
++            "command": "/usr/bin/gcc",
++            "args": [
++                "-fdiagnostics-color=always",
++                "-g",
++                "${file}",
++                "-o",
++                "${fileDirname}/${fileBasenameNoExtension}"
++            ],
++            "options": {
++                "cwd": "${fileDirname}"
++            },
++            "problemMatcher": [
++                "$gcc"
++            ],
++            "group": {
++                "kind": "build",
++                "isDefault": true
++            },
++            "detail": "调试器生成的任务。"
++        }
++    ],
++    "version": "2.0.0"
++}
+\ No newline at end of file
+diff --git a/kernel/defs.h b/kernel/defs.h
+index 59f7aae..36f3526 100644
+--- a/kernel/defs.h
++++ b/kernel/defs.h
+@@ -157,16 +157,28 @@ void            uartputc(int);
+ void            uartputc_sync(int);
+ int             uartgetc(void);
+ 
++// vmcopyin.c
++int             copyin_new(pagetable_t, char *, uint64, uint64);
++int             copyinstr_new(pagetable_t, char *, uint64, uint64);
++
+ // vm.c
++void            vmprint(pagetable_t);
++void            vmppt(pagetable_t,uint64,int);
+ void            kvminit(void);
+ void            kvminithart(void);
++pagetable_t     kvminit_fake(void);
++void            kvminithart(void);
++void            kvminithart_fake(pagetable_t);
++void            free_kp(pagetable_t);
+ uint64          kvmpa(uint64);
+ void            kvmmap(uint64, uint64, uint64, int);
++void            kvmmap_fake(pagetable_t, uint64, uint64, uint64, int);
+ int             mappages(pagetable_t, uint64, uint64, uint64, int);
+ pagetable_t     uvmcreate(void);
+ void            uvminit(pagetable_t, uchar *, uint);
+ uint64          uvmalloc(pagetable_t, uint64, uint64);
+ uint64          uvmdealloc(pagetable_t, uint64, uint64);
++uint64          uvmdealloc_u_in_k(pagetable_t, uint64, uint64);
+ #ifdef SOL_COW
+ #else
+ int             uvmcopy(pagetable_t, pagetable_t, uint64);
+@@ -178,6 +190,7 @@ uint64          walkaddr(pagetable_t, uint64);
+ int             copyout(pagetable_t, uint64, char *, uint64);
+ int             copyin(pagetable_t, char *, uint64, uint64);
+ int             copyinstr(pagetable_t, char *, uint64, uint64);
++int             sync_pagetable(pagetable_t, pagetable_t, uint64, uint64);
+ int             test_pagetable();
+ 
+ // plic.c
+diff --git a/kernel/exec.c b/kernel/exec.c
+index 7b8a524..20cd601 100644
+--- a/kernel/exec.c
++++ b/kernel/exec.c
+@@ -97,6 +97,9 @@ int exec(char *path, char **argv) {
+   p->trapframe->sp = sp;          // initial stack pointer
+   proc_freepagetable(oldpagetable, oldsz);
+ 
++  if(p->pid == 1){
++    vmprint(p->pagetable);
++  }
+   return argc;  // this ends up in a0, the first argument to main(argc, argv)
+ 
+ bad:
+diff --git a/kernel/proc.c b/kernel/proc.c
+index 292ccb8..e87fe8e 100644
+--- a/kernel/proc.c
++++ b/kernel/proc.c
+@@ -34,9 +34,10 @@ void procinit(void) {
+     // guard page.
+     char *pa = kalloc();
+     if (pa == 0) panic("kalloc");
+-    uint64 va = KSTACK((int)(p - proc));
+-    kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+-    p->kstack = va;
++    p->kstack_pa = (uint64)pa;//拷贝
++    uint64 va = KSTACK((int)(p - proc));// 计算内核栈所在的虚拟地址
++    kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);// 在内核页表建立内核栈的映射
++    p->kstack = va;// 将内核栈的虚拟地址存储于进程控制块
+   }
+   kvminithart();
+ }
+@@ -103,6 +104,15 @@ found:
+     return 0;
+   }
+ 
++  p->k_pagetable = kvminit_fake();
++  if (p->k_pagetable == 0) {
++    freeproc(p);
++    release(&p->lock);
++    return 0;
++  }
++
++  kvmmap_fake(p->k_pagetable, p->kstack, p->kstack_pa, PGSIZE, PTE_R | PTE_W);
++
+   // An empty user page table.
+   p->pagetable = proc_pagetable(p);
+   if (p->pagetable == 0) {
+@@ -110,7 +120,7 @@ found:
+     release(&p->lock);
+     return 0;
+   }
+-
++  
+   // Set up new context to start executing at forkret,
+   // which returns to user space.
+   memset(&p->context, 0, sizeof(p->context));
+@@ -127,6 +137,13 @@ static void freeproc(struct proc *p) {
+   if (p->trapframe) kfree((void *)p->trapframe);
+   p->trapframe = 0;
+   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
++
++  //释放内核页表
++  //直接写没有freewalk用、、、、fuck
++  if (p->k_pagetable) {
++    free_kp(p->k_pagetable);
++  }
++  
+   p->pagetable = 0;
+   p->sz = 0;
+   p->pid = 0;
+@@ -192,17 +209,23 @@ void userinit(void) {
+   // and data into it.
+   uvminit(p->pagetable, initcode, sizeof(initcode));
+   p->sz = PGSIZE;
++  
++  // 用户初始化进程映射到内核页表中
++  sync_pagetable(p->pagetable, p->k_pagetable, 0, p->sz);
+ 
+   // prepare for the very first "return" from kernel to user.
+   p->trapframe->epc = 0;      // user program counter
+   p->trapframe->sp = PGSIZE;  // user stack pointer
+ 
++  // printf("1");
++
+   safestrcpy(p->name, "initcode", sizeof(p->name));
+   p->cwd = namei("/");
+ 
+   p->state = RUNNABLE;
+-
++  // printf("2");
+   release(&p->lock);
++  // printf("3");
+ }
+ 
+ // Grow or shrink user memory by n bytes.
+@@ -210,14 +233,22 @@ void userinit(void) {
+ int growproc(int n) {
+   uint sz;
+   struct proc *p = myproc();
+-
+   sz = p->sz;
+-  if (n > 0) {
++
++  if (PGROUNDUP(sz + n) >= PLIC) {
++      return -1;
++    }//防止用户的盖到内存上
++
++  if (n > 0) {//proc增加
+     if ((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+       return -1;
+     }
++    sync_pagetable(p->pagetable, p->k_pagetable, sz, sz + n);
++    //同时更新内核映射
+   } else if (n < 0) {
+     sz = uvmdealloc(p->pagetable, sz, sz + n);
++    // 用户删内核也删 这里如果释放物理内存可能导致重复回收
++    uvmdealloc_u_in_k(p->k_pagetable, p->sz, p->sz + n);
+   }
+   p->sz = sz;
+   return 0;
+@@ -261,7 +292,8 @@ int fork(void) {
+   pid = np->pid;
+ 
+   np->state = RUNNABLE;
+-
++  //fork也会产生子进程
++  sync_pagetable(np->pagetable, np->k_pagetable, 0, np->sz);
+   release(&np->lock);
+ 
+   return pid;
+@@ -430,6 +462,9 @@ void scheduler(void) {
+         // before jumping back to us.
+         p->state = RUNNING;
+         c->proc = p;
++
++        kvminithart_fake(p->k_pagetable);//入表
++        //在这之前插入
+         swtch(&c->context, &p->context);
+ 
+         // Process is done running for now.
+@@ -437,6 +472,8 @@ void scheduler(void) {
+         c->proc = 0;
+ 
+         found = 1;
++        //无进程运行的适配
++        kvminithart();//全局的那个、、、
+       }
+       release(&p->lock);
+     }
+diff --git a/kernel/proc.h b/kernel/proc.h
+index 9c16ea7..5c5ee9a 100644
+--- a/kernel/proc.h
++++ b/kernel/proc.h
+@@ -103,4 +103,6 @@ struct proc {
+   struct file *ofile[NOFILE];  // Open files
+   struct inode *cwd;           // Current directory
+   char name[16];               // Process name (debugging)
++  pagetable_t k_pagetable;
++  uint64 kstack_pa;
+ };
+diff --git a/kernel/vm.c b/kernel/vm.c
+index b794885..751b2a5 100644
+--- a/kernel/vm.c
++++ b/kernel/vm.c
+@@ -52,6 +52,43 @@ void kvminithart() {
+   sfence_vma();
+ }
+ 
++
++void kvminithart_fake(pagetable_t kernel_pagetable)
++{
++  w_satp(MAKE_SATP(kernel_pagetable));
++  sfence_vma();
++}
++
++
++pagetable_t kvminit_fake()
++{
++  pagetable_t kernal_pagetable = (pagetable_t) kalloc();
++  memset(kernal_pagetable, 0, PGSIZE);
++
++  // uart registers
++  kvmmap_fake(kernal_pagetable, UART0, UART0, PGSIZE, PTE_R | PTE_W);
++
++  // virtio mmio disk interface
++  kvmmap_fake(kernal_pagetable, VIRTIO0, VIRTIO0, PGSIZE, PTE_R | PTE_W);
++
++  //跳过CLINT
++
++  // PLIC
++  kvmmap_fake(kernal_pagetable, PLIC, PLIC, 0x400000, PTE_R | PTE_W);
++
++  // map kernel text executable and read-only.
++  kvmmap_fake(kernal_pagetable, KERNBASE, KERNBASE, (uint64)etext-KERNBASE, PTE_R | PTE_X);
++
++  // map kernel data and the physical RAM we'll make use of.
++  kvmmap_fake(kernal_pagetable, (uint64)etext, (uint64)etext, PHYSTOP-(uint64)etext, PTE_R | PTE_W);
++
++  // map the trampoline for trap entry/exit to
++  // the highest virtual address in the kernel.
++  kvmmap_fake(kernal_pagetable, TRAMPOLINE, (uint64)trampoline, PGSIZE, PTE_R | PTE_X);
++
++  return kernal_pagetable;
++}
++
+ // Return the address of the PTE in page table pagetable
+ // that corresponds to virtual address va.  If alloc!=0,
+ // create any required page-table pages.
+@@ -103,6 +140,25 @@ uint64 walkaddr(pagetable_t pagetable, uint64 va) {
+ void kvmmap(uint64 va, uint64 pa, uint64 sz, int perm) {
+   if (mappages(kernel_pagetable, va, sz, pa, perm) != 0) panic("kvmmap");
+ }
++void kvmmap_fake(pagetable_t kernel_pagetable, uint64 va, uint64 pa, uint64 sz, int perm)
++{
++  if (mappages(kernel_pagetable, va, sz, pa, perm) != 0) panic("kvmmap");
++}
++void free_kp(pagetable_t pagetable){
++  for (int i = 0; i < 512; i++) {
++    pte_t pte = pagetable[i];
++    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
++      // this PTE points to a lower-level page table.
++      uint64 child = PTE2PA(pte);
++      free_kp((pagetable_t)child);
++      pagetable[i] = 0;
++    } else{
++      pagetable[i] = 0;
++      //跳过释放叶子节点
++    }
++  }
++  kfree((void *)pagetable);
++}
+ 
+ // translate a kernel virtual address to
+ // a physical address. only needed for
+@@ -124,6 +180,8 @@ uint64 kvmpa(uint64 va) {
+ // physical addresses starting at pa. va and size might not
+ // be page-aligned. Returns 0 on success, -1 if walk() couldn't
+ // allocate a needed page-table page.
++// 为从虚拟地址va开始引用的物理地址pa创建页表项（PTE）。
++// va和size可能不是按页对齐的。成功时返回0，如果walk()无法分配所需的页表页，则返回-1。
+ int mappages(pagetable_t pagetable, uint64 va, uint64 size, uint64 pa, int perm) {
+   uint64 a, last;
+   pte_t *pte;
+@@ -214,6 +272,8 @@ uint64 uvmalloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz) {
+ // newsz.  oldsz and newsz need not be page-aligned, nor does newsz
+ // need to be less than oldsz.  oldsz can be larger than the actual
+ // process size.  Returns the new process size.
++// 释放用户页以将进程大小从 oldsz 调整到 newsz。oldsz 和 newsz 不需要按页对齐，
++// 而且 newsz 无需小于oldsz。oldsz 可能大于实际进程大小。返回新的进程大小。
+ uint64 uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz) {
+   if (newsz >= oldsz) return oldsz;
+ 
+@@ -225,6 +285,19 @@ uint64 uvmdealloc(pagetable_t pagetable, uint64 oldsz, uint64 newsz) {
+   return newsz;
+ }
+ 
++// 释放用户页以将进程大小从 oldsz 调整到 newsz。oldsz 和 newsz 不需要按页对齐，
++// 而且 newsz 无需小于oldsz。oldsz 可能大于实际进程大小。返回新的进程大小。
++uint64 uvmdealloc_u_in_k(pagetable_t pagetable, uint64 oldsz, uint64 newsz) {
++  if (newsz >= oldsz) return oldsz;
++
++  if (PGROUNDUP(newsz) < PGROUNDUP(oldsz)) {
++    int npages = (PGROUNDUP(oldsz) - PGROUNDUP(newsz)) / PGSIZE;
++    uvmunmap(pagetable, PGROUNDUP(newsz), npages, 0);//释放了物理内存会报错
++  }
++
++  return newsz;
++}
++
+ // Recursively free page-table pages.
+ // All leaf mappings must already have been removed.
+ void freewalk(pagetable_t pagetable) {
+@@ -243,6 +316,56 @@ void freewalk(pagetable_t pagetable) {
+   kfree((void *)pagetable);
+ }
+ 
++void vmprint(pagetable_t pagetable) {
++    printf("page table %p\n",pagetable);
++    vmppt(pagetable,0,0);
++}
++void vmppt(pagetable_t pagetable,uint64 va,int floor) {
++  // there are 2^9 = 512 PTEs in a page table.
++  // 遍历一个页表页的PTE表项 
++  for (int i = 0; i < 512; i++) {//i是页表项的标号
++    pte_t pte = pagetable[i];
++    char rwxu[4]={'-','-','-','-'};
++    if(PTE_FLAGS(pte)&PTE_R)rwxu[0]='r';
++    if(PTE_FLAGS(pte)&PTE_W)rwxu[1]='w';
++    if(PTE_FLAGS(pte)&PTE_X)rwxu[2]='x';
++    if(PTE_FLAGS(pte)&PTE_U)rwxu[3]='u';
++      /* 判断PTE的Flag位，如果还有下一级页表(即当前是根页表或次页表) */
++    if ((pte & PTE_V) && (pte & (PTE_R | PTE_W | PTE_X)) == 0) {
++      uint64 child = PTE2PA(pte);// 将PTE转为为物理地址
++      // printf("%d,%d",floor,i);
++      // printf("||");
++      // printf("a");
++      if(floor == 0) printf("||");
++      if(floor == 1) printf("||\t||");
++      if(floor == 2) printf("||\t||\t||");
++      printf("idx: %d: pa: %p, flags: %s\n",i,child,rwxu);
++      uint64 va2=(va<<9)+(i<<12); //更新va
++      // printf("floor = %d",floor);
++      vmppt((pagetable_t)child,va2,floor +1);// 递归调用freewalk
++
++      
++    } else if (pte & PTE_V) {
++      // printf("ye%d,%d",floor,i);
++      // printf("elsefloor = %d",floor);
++      // printf("b");
++      if(floor == 0) printf("||");
++      if(floor == 1) printf("||\t||");
++      if(floor == 2) printf("||\t||\t||");
++      uint64 va2=(va<<9)+(i<<12); //更新va
++      // if(floor == 2)
++      //    printf("||\t");
++      // printf("||\t||");
++      uint64 child = PTE2PA(pte);// 将PTE转为为物理地址
++      // uint64 va = pte;
++      printf("idx: %d: va: %p -> pa: %p, flags: %s\n",i,va2,child,rwxu);
++      // printf("idx: %d: pa:%p, flags： %s\n",i,child,rwxu);
++    }
++  }
++  // kfree((void *)pagetable);
++}
++
++
+ // Free user memory pages,
+ // then free page-table pages.
+ void uvmfree(pagetable_t pagetable, uint64 sz) {
+@@ -256,6 +379,10 @@ void uvmfree(pagetable_t pagetable, uint64 sz) {
+ // physical memory.
+ // returns 0 on success, -1 on failure.
+ // frees any allocated pages on failure.
++// 给定父进程的页表，将其内存复制到子进程的页表中。 
++// 复制页面表和物理内存。 
++// 成功返回0，失败返回-1。 
++// 失败时释放任何已分配的页面。
+ int uvmcopy(pagetable_t old, pagetable_t new, uint64 sz) {
+   pte_t *pte;
+   uint64 pa, i;
+@@ -281,6 +408,35 @@ err:
+   return -1;
+ }
+ 
++int sync_pagetable(pagetable_t old, pagetable_t new, uint64 sz, uint64 sz_n)
++{
++  pte_t *pte;
++  uint64 pa, i;
++  uint flags;
++
++  sz = PGROUNDUP(sz);
++
++  for(i = sz; i < sz_n; i += PGSIZE){
++    if((pte = walk(old, i, 0)) == 0)
++      panic("sync_pagetable:pte should exist");
++    if((*pte & PTE_V) == 0)
++      panic("sync_pagetable: page not present");
++    pa = PTE2PA(*pte);
++    //允许内存访问
++    flags = PTE_FLAGS(*pte) & (~PTE_U);//对第四位为1的掩码取反
++    if(mappages(new, i, PGSIZE, (uint64)pa, flags) != 0){//创建页表项
++      // 移除映射
++      goto err;
++    }
++  }
++  return 0;
++
++ err:
++  uvmunmap(new, 0, i / PGSIZE, 0);
++  return -1;
++
++}
++
+ // mark a PTE invalid for user access.
+ // used by exec for the user stack guard page.
+ void uvmclear(pagetable_t pagetable, uint64 va) {
+@@ -316,21 +472,21 @@ int copyout(pagetable_t pagetable, uint64 dstva, char *src, uint64 len) {
+ // Copy len bytes to dst from virtual address srcva in a given page table.
+ // Return 0 on success, -1 on error.
+ int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len) {
+-  uint64 n, va0, pa0;
+-
+-  while (len > 0) {
+-    va0 = PGROUNDDOWN(srcva);
+-    pa0 = walkaddr(pagetable, va0);
+-    if (pa0 == 0) return -1;
+-    n = PGSIZE - (srcva - va0);
+-    if (n > len) n = len;
+-    memmove(dst, (void *)(pa0 + (srcva - va0)), n);
+-
+-    len -= n;
+-    dst += n;
+-    srcva = va0 + PGSIZE;
+-  }
+-  return 0;
++  // uint64 n, va0, pa0;
++  
++  // while (len > 0) {
++  //   va0 = PGROUNDDOWN(srcva);
++  //   pa0 = walkaddr(pagetable, va0);
++  //   if (pa0 == 0) return -1;
++  //   n = PGSIZE - (srcva - va0);
++  //   if (n > len) n = len;
++  //   memmove(dst, (void *)(pa0 + (srcva - va0)), n);
++
++  //   len -= n;
++  //   dst += n;
++  //   srcva = va0 + PGSIZE;
++  // }
++  return copyin_new(pagetable, dst, srcva, len);
+ }
+ 
+ // Copy a null-terminated string from user to kernel.
+@@ -338,39 +494,41 @@ int copyin(pagetable_t pagetable, char *dst, uint64 srcva, uint64 len) {
+ // until a '\0', or max.
+ // Return 0 on success, -1 on error.
+ int copyinstr(pagetable_t pagetable, char *dst, uint64 srcva, uint64 max) {
+-  uint64 n, va0, pa0;
+-  int got_null = 0;
+-
+-  while (got_null == 0 && max > 0) {
+-    va0 = PGROUNDDOWN(srcva);
+-    pa0 = walkaddr(pagetable, va0);
+-    if (pa0 == 0) return -1;
+-    n = PGSIZE - (srcva - va0);
+-    if (n > max) n = max;
+-
+-    char *p = (char *)(pa0 + (srcva - va0));
+-    while (n > 0) {
+-      if (*p == '\0') {
+-        *dst = '\0';
+-        got_null = 1;
+-        break;
+-      } else {
+-        *dst = *p;
+-      }
+-      --n;
+-      --max;
+-      p++;
+-      dst++;
+-    }
+-
+-    srcva = va0 + PGSIZE;
+-  }
+-  if (got_null) {
+-    return 0;
+-  } else {
+-    return -1;
+-  }
++  return copyinstr_new(pagetable, dst, srcva, max);
+ }
++  // uint64 n, va0, pa0;
++  // int got_null = 0;
++
++  // while (got_null == 0 && max > 0) {
++  //   va0 = PGROUNDDOWN(srcva);
++  //   pa0 = walkaddr(pagetable, va0);
++  //   if (pa0 == 0) return -1;
++  //   n = PGSIZE - (srcva - va0);
++  //   if (n > max) n = max;
++
++  //   char *p = (char *)(pa0 + (srcva - va0));
++  //   while (n > 0) {
++  //     if (*p == '\0') {
++  //       *dst = '\0';
++  //       got_null = 1;
++  //       break;
++  //     } else {
++  //       *dst = *p;
++  //     }
++  //     --n;
++  //     --max;
++  //     p++;
++  //     dst++;
++  //   }
++
++  //   srcva = va0 + PGSIZE;
++  // }
++  // if (got_null) {
++  //   return 0;
++  // } else {
++  //   return -1;
++  // }
++
+ 
+ // check if use global kpgtbl or not
+ int test_pagetable() {
+diff --git a/time b/time
+new file mode 100644
+index 0000000..301160a
+--- /dev/null
++++ b/time
+@@ -0,0 +1 @@
++8
+\ No newline at end of file
