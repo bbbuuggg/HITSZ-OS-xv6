@@ -34,9 +34,10 @@ void procinit(void) {
     // guard page.
     char *pa = kalloc();
     if (pa == 0) panic("kalloc");
-    uint64 va = KSTACK((int)(p - proc));
-    kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-    p->kstack = va;
+    p->kstack_pa = (uint64)pa;//拷贝
+    uint64 va = KSTACK((int)(p - proc));// 计算内核栈所在的虚拟地址
+    kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);// 在内核页表建立内核栈的映射
+    p->kstack = va;// 将内核栈的虚拟地址存储于进程控制块
   }
   kvminithart();
 }
@@ -103,6 +104,15 @@ found:
     return 0;
   }
 
+  p->k_pagetable = kvminit_fake();
+  if (p->k_pagetable == 0) {
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  kvmmap_fake(p->k_pagetable, p->kstack, p->kstack_pa, PGSIZE, PTE_R | PTE_W);
+
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if (p->pagetable == 0) {
@@ -110,7 +120,7 @@ found:
     release(&p->lock);
     return 0;
   }
-
+  
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -127,6 +137,13 @@ static void freeproc(struct proc *p) {
   if (p->trapframe) kfree((void *)p->trapframe);
   p->trapframe = 0;
   if (p->pagetable) proc_freepagetable(p->pagetable, p->sz);
+
+  //释放内核页表
+  //直接写没有freewalk用、、、、fuck
+  if (p->k_pagetable) {
+    free_kp(p->k_pagetable);
+  }
+  
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -192,17 +209,23 @@ void userinit(void) {
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
+  
+  // 用户初始化进程映射到内核页表中
+  sync_pagetable(p->pagetable, p->k_pagetable, 0, p->sz);
 
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
 
+  // printf("1");
+
   safestrcpy(p->name, "initcode", sizeof(p->name));
   p->cwd = namei("/");
 
   p->state = RUNNABLE;
-
+  // printf("2");
   release(&p->lock);
+  // printf("3");
 }
 
 // Grow or shrink user memory by n bytes.
@@ -210,14 +233,22 @@ void userinit(void) {
 int growproc(int n) {
   uint sz;
   struct proc *p = myproc();
-
   sz = p->sz;
-  if (n > 0) {
+
+  if (PGROUNDUP(sz + n) >= PLIC) {
+      return -1;
+    }//防止用户的盖到内存上
+
+  if (n > 0) {//proc增加
     if ((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
+    sync_pagetable(p->pagetable, p->k_pagetable, sz, sz + n);
+    //同时更新内核映射
   } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    // 用户删内核也删 这里如果释放物理内存可能导致重复回收
+    uvmdealloc_u_in_k(p->k_pagetable, p->sz, p->sz + n);
   }
   p->sz = sz;
   return 0;
@@ -261,7 +292,8 @@ int fork(void) {
   pid = np->pid;
 
   np->state = RUNNABLE;
-
+  //fork也会产生子进程
+  sync_pagetable(np->pagetable, np->k_pagetable, 0, np->sz);
   release(&np->lock);
 
   return pid;
@@ -430,6 +462,9 @@ void scheduler(void) {
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+
+        kvminithart_fake(p->k_pagetable);//入表
+        //在这之前插入
         swtch(&c->context, &p->context);
 
         // Process is done running for now.
@@ -437,6 +472,8 @@ void scheduler(void) {
         c->proc = 0;
 
         found = 1;
+        //无进程运行的适配
+        kvminithart();//全局的那个、、、
       }
       release(&p->lock);
     }
