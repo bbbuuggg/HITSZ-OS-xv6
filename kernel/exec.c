@@ -92,6 +92,11 @@ int exec(char *path, char **argv) {
   // Commit to the user image.
   oldpagetable = p->pagetable;
   p->pagetable = pagetable;
+
+   // 同样需要在内核页表中释放掉 oldpagetable 的映射, 然后再建立新的 pagetable 的映射.
+  uvmdealloc_u_in_k(p->k_pagetable, p->sz, 0);
+  sync_pagetable(p->pagetable, p->k_pagetable, 0, sz);
+
   p->sz = sz;
   p->trapframe->epc = elf.entry;  // initial program counter = main
   p->trapframe->sp = sp;          // initial stack pointer

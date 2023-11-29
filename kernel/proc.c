@@ -34,8 +34,10 @@ void procinit(void) {
     // guard page.
     char *pa = kalloc();
     if (pa == 0) panic("kalloc");
-    p->kstack_pa = (uint64)pa;//拷贝
     uint64 va = KSTACK((int)(p - proc));// 计算内核栈所在的虚拟地址
+
+    p->kstack_pa = (uint64)pa;//拷贝
+
     kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);// 在内核页表建立内核栈的映射
     p->kstack = va;// 将内核栈的虚拟地址存储于进程控制块
   }
@@ -243,7 +245,7 @@ int growproc(int n) {
     if ((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
       return -1;
     }
-    sync_pagetable(p->pagetable, p->k_pagetable, sz, sz + n);
+    sync_pagetable(p->pagetable, p->k_pagetable, p->sz, p->sz + n);
     //同时更新内核映射
   } else if (n < 0) {
     sz = uvmdealloc(p->pagetable, sz, sz + n);
@@ -470,10 +472,9 @@ void scheduler(void) {
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
-
-        found = 1;
         //无进程运行的适配
         kvminithart();//全局的那个、、、
+        found = 1;
       }
       release(&p->lock);
     }
